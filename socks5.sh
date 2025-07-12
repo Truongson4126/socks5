@@ -1,81 +1,73 @@
 #!/bin/bash
 
-# Define color codes
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+# Màu hiển thị
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 
-# Cố định thông tin
+# 🔧 Cấu hình cố định
 port=3128
 username="tung8386"
 password="zxcv1234"
 
 # Kiểm tra quyền root
 if [[ $EUID -ne 0 ]]; then
-    echo -e "${RED}Vui lòng chạy script với quyền root hoặc sudo.${NC}"
-    exit 1
+  echo -e "${RED}Vui lòng chạy script với quyền root.${NC}"
+  exit 1
 fi
 
-echo -e "${CYAN}Port SOCKS5 proxy sẽ dùng: $port${NC}"
-echo -e "${CYAN}Username: $username${NC}"
+echo -e "${CYAN}→ Port: $port"
+echo -e "→ User: $username${NC}"
 
-# Cài đặt Dante nếu chưa có
+# Cài nếu chưa có Dante
 if ! command -v danted &> /dev/null; then
-    echo -e "${YELLOW}Đang cài đặt Dante SOCKS5 server...${NC}"
-    apt update -y && apt install dante-server curl -y
+  echo -e "${YELLOW}Đang cài Dante...${NC}"
+  apt update -y && apt install dante-server curl -y
 fi
 
-# Tạo file log cho Dante
+# Tạo file log và đặt quyền
 touch /var/log/danted.log
 chown nobody:nogroup /var/log/danted.log
 
-# Xác định interface chính
-primary_interface=$(ip route | grep default | awk '{print $5}')
-if [[ -z "$primary_interface" ]]; then
-    echo -e "${RED}Không thể xác định interface mạng chính.${NC}"
-    exit 1
+# Xác định interface mạng chính
+iface=$(ip route | awk '/default/ {print $5; exit}')
+if [[ -z "$iface" ]]; then
+  echo -e "${RED}Không xác định được interface mạng.${NC}"
+  exit 1
 fi
 
-# Ghi cấu hình Dante
+# Ghi cấu hình
 cat <<EOF > /etc/danted.conf
 logoutput: /var/log/danted.log
 internal: 0.0.0.0 port = $port
-external: $primary_interface
+external: $iface
 method: username
 user.privileged: root
 user.notprivileged: nobody
-client pass {
-    from: 0.0.0.0/0 to: 0.0.0.0/0
-    log: connect disconnect error
-}
-socks pass {
-    from: 0.0.0.0/0 to: 0.0.0.0/0
-    log: connect disconnect error
-}
+client pass { from: 0.0.0.0/0 to: 0.0.0.0/0 log: connect disconnect error }
+socks pass  { from: 0.0.0.0/0 to: 0.0.0.0/0 log: connect disconnect error }
 EOF
 
-# Tạo user và đặt mật khẩu
+# Tạo hoặc reset user
 if id "$username" &>/dev/null; then
-    echo -e "${YELLOW}User $username đã tồn tại. Đang cập nhật mật khẩu...${NC}"
+  echo -e "${YELLOW}User $username đã tồn tại. Cập nhật mật khẩu...${NC}"
 else
-    useradd --shell /usr/sbin/nologin "$username"
-    echo -e "${GREEN}Đã tạo user $username.${NC}"
+  useradd --shell /usr/sbin/nologin "$username"
+  echo -e "${GREEN}Tạo user $username thành công.${NC}"
 fi
 echo "$username:$password" | chpasswd
-echo -e "${GREEN}Đã đặt mật khẩu cho user $username.${NC}"
+echo -e "${GREEN}Đặt mật khẩu cho user $username.${NC}"
 
-# Mở cổng firewall nếu cần
+# Mở port trên firewall
 if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
-    ufw allow "$port/tcp"
+  ufw allow "$port/tcp"
 fi
-iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport "$port" -j ACCEPT
 
-# Sửa service nếu cần
-service_path=$(systemctl show -p FragmentPath danted | cut -d= -f2)
-if [[ -f "$service_path" ]]; then
-    sed -i '/\[Service\]/a ReadWriteDirectories=/var/log' "$service_path"
+iptables -C INPUT -p tcp --dport "$port" -j ACCEPT 2>/dev/null \
+  || iptables -A INPUT -p tcp --dport "$port" -j ACCEPT
+
+# Cập nhật service (fix log permission)
+svc=$(systemctl show -p FragmentPath danted | cut -d= -f2)
+if [[ -f "$svc" ]]; then
+  sed -i '/\[Service\]/a ReadWriteDirectories=/var/log' "$svc"
 fi
 
 # Khởi động lại dịch vụ
@@ -83,15 +75,15 @@ systemctl daemon-reload
 systemctl restart danted
 systemctl enable danted
 
-# Kiểm tra dịch vụ
+# Kiểm tra kết quả
 if systemctl is-active --quiet danted; then
-    echo -e "${GREEN}Dante SOCKS5 server đang chạy trên port $port.${NC}"
+  echo -e "${GREEN}Dante đang chạy trên port $port.${NC}"
 else
-    echo -e "${RED}Không thể khởi động danted. Kiểm tra log tại /var/log/danted.log.${NC}"
-    exit 1
+  echo -e "${RED}Khởi động Dante thất bại. Kiểm tra /var/log/danted.log.${NC}"
+  exit 1
 fi
 
-# Kiểm tra proxy
-echo -e "${CYAN}Đang kiểm tra kết nối proxy bằng curl...${NC}"
-proxy_ip=$(hostname -I | awk '{print $1}')
-curl -x socks5://$username:$password@$proxy_ip:$port https://ipinfo.io/
+# Test proxy
+echo -e "${CYAN}Đang kiểm tra kết nối proxy...${NC}"
+ip=$(hostname -I | awk '{print $1}')
+curl -s --proxy socks5h://"$username:$password@$ip:$port" https://ipinfo.io

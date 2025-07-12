@@ -46,15 +46,6 @@ client pass { from: 0.0.0.0/0 to: 0.0.0.0/0 log: connect disconnect error }
 socks pass  { from: 0.0.0.0/0 to: 0.0.0.0/0 log: connect disconnect error }
 EOF
 
-# Tạo hoặc reset user
-if id "$username" &>/dev/null; then
-  echo -e "${YELLOW}User $username đã tồn tại. Cập nhật mật khẩu...${NC}"
-else
-  useradd --shell /usr/sbin/nologin "$username"
-  echo -e "${GREEN}Tạo user $username thành công.${NC}"
-fi
-echo "$username:$password" | chpasswd
-echo -e "${GREEN}Đặt mật khẩu cho user $username.${NC}"
 
 # Mở port trên firewall
 if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
